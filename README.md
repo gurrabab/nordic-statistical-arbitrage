@@ -58,5 +58,36 @@ pytest -q
 python3 main.py
 ```
 
+## Performance and risk metrics
+The backtest workflow now computes a compact set of standard portfolio metrics from the strategy's net daily returns.
+
+### Core formulas
+- Total return: $R_{total} = \frac{E_T}{E_0} - 1$
+- Annualized return: $R_{ann} = (1 + \bar{r})^{252} - 1$
+- Annualized volatility: $\sigma_{ann} = \sigma_{daily} \sqrt{252}$
+- Sharpe ratio: $\frac{\bar{r} - r_f/252}{\sigma_{daily}} \sqrt{252}$
+- Sortino ratio: $\frac{\bar{r} - r_f/252}{\sigma_{downside}} \sqrt{252}$
+- Drawdown: $DD_t = \frac{E_t}{\max(E_1, \dots, E_t)} - 1$
+- Maximum drawdown: $\max_t DD_t$
+- Calmar ratio: $\frac{R_{ann}}{|\text{Max Drawdown}|}$
+- Historical VaR 95%: empirical 5th percentile of daily returns
+- Historical Expected Shortfall 95%: average of returns at or below the VaR threshold
+- Hit rate: fraction of positive daily returns
+
+### Interpretation
+- Total return shows the overall change in equity over the sample.
+- Annualized return and volatility summarize the strategy's average growth and variability on a yearly basis.
+- Sharpe and Sortino ratios compare reward to risk; the Sortino ratio focuses on downside volatility instead of total volatility.
+- Maximum drawdown measures the largest peak-to-trough decline in equity.
+- Calmar ratio relates annualized return to drawdown and is most useful when comparing strategies with different risk profiles.
+- VaR and Expected Shortfall quantify tail risk over the historical sample.
+- Hit rate shows how often the strategy produced a positive daily return.
+
+### Limitations
+- Sharpe ratio can be unstable and sensitive to the chosen risk-free rate and sample period.
+- Historical VaR and Expected Shortfall are based on the past and do not guarantee future tail behavior.
+- Historical backtests can overfit to the sample and are affected by transaction costs, data snooping, and implementation assumptions.
+- The strategy remains a research prototype and should not be treated as a production-ready trading system.
+
 ## Disclaimer
 This project is for educational and research purposes only. It does not constitute financial advice, and no trading strategy should be implemented without independent review, robust validation, and appropriate risk controls.
