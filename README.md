@@ -144,5 +144,123 @@ The backtest workflow now computes a compact set of standard portfolio metrics f
 - Historical backtests can overfit to the sample and are affected by transaction costs, data snooping, and implementation assumptions.
 - The strategy remains a research prototype and should not be treated as a production-ready trading system.
 
+## Walk-forward validation
+
+The walk-forward analysis provides a more rigorous out-of-sample test by
+evaluating the top-ranked pairs across multiple sequential time periods.
+
+### Methodology
+
+Each walk-forward window consists of a **training period** followed immediately
+by a **test period**:
+
+```
+|----------- training -----------|----- test -----|
+t=0                            t=T             t=T+N
+```
+
+The process repeats by sliding the window forward:
+
+```
+|----------- training -----------|----- test -----|
+                                 |----------- training -----------|----- test -----|
+```
+
+### Window types
+
+| Type | Behaviour |
+|---|---|
+| **Rolling** | Fixed-size training window, slides by `step_size_days` |
+| **Expanding** | Training window grows from the earliest date each iteration |
+
+### Default parameters
+
+| Parameter | Value | Description |
+|---|---|---|
+| `train_window_days` | 504 | ~2 years of trading days |
+| `test_window_days` | 63 | ~3 months |
+| `step_size_days` | 63 | Non-overlapping quarterly steps |
+| `expanding_window` | False | Fixed-size rolling |
+| `top_n_pairs_per_window` | 3 | Pairs evaluated per window |
+
+### Anti-leakage rules
+
+1. **Per-window ranking** — Pairs are screened and ranked independently
+   in each training window.  Training scores from one window never affect
+   another.
+2. **Fixed hedge ratio** — The hedge ratio is estimated on training data
+   and locked for the entire test period.
+3. **No gap or overlap** — The test period starts the day after training
+   ends.
+4. **Fixed thresholds** — Screening parameters are set once at the start
+   and never re-tuned.
+5. **All windows saved** — Windows with no qualifying pairs, poor
+   performance, or zero trades are all recorded.
+
+### Consistency score
+
+The consistency score summarises a pair's performance across all windows
+in which it was selected.  It is the equally-weighted average of four
+components, each normalised to [0, 1]:
+
+| Component | Formula | Rewards |
+|---|---|---|
+| Return score | `max(0, median_return) / max_median_return` | Positive median return |
+| Sharpe score | `max(0, median_sharpe) / max_median_sharpe` | Positive risk-adjusted return |
+| Profitability | `profitable_window_fraction` | Many profitable windows |
+| Drawdown score | `clip(1 + worst_drawdown, 0, 1)` | Limited worst drawdown |
+
+$$\text{consistency\_score} = 0.25 \cdot (R_{\text{score}} + S_{\text{score}} + P + D_{\text{score}})$$
+
+### Interpretation
+
+- Pairs with **consistency_score > 0.5** have positive median returns,
+  positive Sharpe ratios, profitable in most windows, and manageable
+  drawdowns.
+- A high score does **not** guarantee future performance.
+- Pairs selected in many windows are more robust than pairs selected
+  only once.
+
+### Limitations
+
+- **Repeated testing** — Evaluating pairs across multiple windows increases
+  the opportunity for false discovery.  The per-window ranking mitigates
+  this but does not eliminate it.
+- **Survivorship bias** — The ticker universe is fixed.  Delisted or
+  bankrupt equities are not included.
+- **Parameter stability** — Screening thresholds are fixed.  A different
+  threshold set could produce different results.
+- **Cost assumptions** — Transaction costs and slippage are constant.
+  Real execution may differ.
+
+### Running walk-forward analysis
+
+```bash
+python3 walk_forward_analysis.py
+```
+
+The script saves:
+- `results/walk_forward_window_results.csv` — one row per pair per window
+- `results/walk_forward_pair_summary.csv` — aggregate per-pair statistics
+- `results/walk_forward_test_return.png` — test return by window
+- `results/walk_forward_sharpe.png` — Sharpe ratio by window
+- `results/walk_forward_profitability.png` — proportion of profitable windows
+- `results/walk_forward_drawdown.png` — worst drawdown by pair
+- `results/walk_forward_selection.png` — pair selection frequency
+
+### Running walk-forward tests
+
+```bash
+pytest tests/test_walk_forward.py -v
+```
+
+### Warning
+
+Walk-forward validation reduces but does **not** eliminate the risk of
+overfitting.  Repeated testing against multiple out-of-sample windows
+can still lead to false discoveries.  The consistency score is a
+descriptive statistic, not a predictive one.  **No backtest methodology
+guarantees future profitability.**
+
 ## Disclaimer
 This project is for educational and research purposes only. It does not constitute financial advice, and no trading strategy should be implemented without independent review, robust validation, and appropriate risk controls.
