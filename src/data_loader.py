@@ -105,6 +105,63 @@ def download_adjusted_close_prices(
     return prices
 
 
+def download_ticker_universe(
+    tickers: Sequence[str] | Iterable[str],
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    period: str | None = None,
+    downloader: callable | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Download price data for a universe of tickers and report per-ticker outcomes."""
+    ticker_list = [str(ticker).strip() for ticker in tickers]
+    if not ticker_list:
+        raise ValueError("tickers must not be empty.")
+
+    report = pd.DataFrame(index=ticker_list, columns=["status", "reason"], dtype=object)
+    report["status"] = "pending"
+    report["reason"] = ""
+
+    loader = downloader or download_adjusted_close_prices
+    downloaded_frames: list[pd.DataFrame] = []
+
+    for ticker in ticker_list:
+        try:
+            prices = loader([ticker], start=start, end=end, period=period)
+        except Exception as exc:  # pragma: no cover - exercised by tests
+            report.at[ticker, "status"] = "failed"
+            report.at[ticker, "reason"] = str(exc)
+            continue
+
+        if not isinstance(prices, pd.DataFrame) or prices.empty:
+            report.at[ticker, "status"] = "failed"
+            report.at[ticker, "reason"] = "empty download"
+            continue
+
+        frame = prices.copy()
+        if len(frame.columns) == 1:
+            frame.columns = [ticker]
+        elif ticker in frame.columns:
+            frame = frame[[ticker]].copy()
+        elif "Adj Close" in frame.columns:
+            frame = frame[["Adj Close"]].copy()
+            frame.columns = [ticker]
+        else:
+            report.at[ticker, "status"] = "failed"
+            report.at[ticker, "reason"] = "expected one price column"
+            continue
+
+        downloaded_frames.append(frame)
+        report.at[ticker, "status"] = "downloaded"
+        report.at[ticker, "reason"] = ""
+
+    if not downloaded_frames:
+        return pd.DataFrame(index=pd.DatetimeIndex([])), report
+
+    price_frame = pd.concat(downloaded_frames, axis=1).sort_index()
+    return price_frame, report
+
+
 def _extract_adjusted_close_prices(
     data: pd.DataFrame,
     ticker_list: list[str],

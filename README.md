@@ -58,6 +58,61 @@ pytest -q
 python3 main.py
 ```
 
+## Nordic pair screener
+The project now includes a modular Nordic pair screener that evaluates a fixed universe of liquid Nordic equities, screens pairs on training data only, ranks them with a transparent training-only score, and then evaluates the top-ranked candidates on a later out-of-sample period.
+
+### Nordic universe
+The screener uses an initial universe of 30 liquid Nordic equities spanning Sweden, Norway, Denmark and Finland, including major banks, industrial names, energy firms, telecoms, and consumer staples.
+
+### Number of possible pairs
+With 30 tickers, the number of unique unordered pairs is:
+
+$$N \times (N - 1) / 2 = 30 \times 29 / 2 = 435$$
+
+### Screening methodology
+1. Download adjusted close prices for the Nordic universe.
+2. Report which tickers fail to download or have missing data.
+3. Filter out tickers that have insufficient history, too much missing data, constant prices, non-positive prices, or poor overlap with the training period.
+4. Generate all unique unordered pairs from the remaining tickers.
+5. For each pair, estimate the spread on the training period only.
+6. Apply filters based on cointegration p-value, ADF p-value, half-life, observation count, and finite hedge ratio.
+7. Rank valid pairs using a transparent training-only score.
+8. Evaluate the top-ranked pairs on the unseen test period using the training-estimated alpha and hedge ratio only.
+
+### Ranking formula
+The ranking score rewards lower p-values, a reasonable half-life, and sufficient sample size. The exact formula is:
+
+$$
+score = 2 \times \log_{10}(p_{coint}) + \log_{10}(p_{adf}) + 0.01 \times \frac{10}{\max(half\_life, 1)} + 0.001 \times n_{obs}
+$$
+
+Because the score uses the training-period p-values and observations, it does not use test-period returns or any information from the out-of-sample window.
+
+### Anti-selection-bias rules
+The pipeline intentionally avoids several common leakage problems:
+- Pairs are ranked using training-period statistics only.
+- Thresholds are selected from the training period and then applied unchanged to the test period.
+- The hedge ratio is estimated once on training data and then kept fixed for the test period.
+- Test performance is reported separately and never used to rank or re-select candidate pairs.
+- The screener reports both the training screening table and the out-of-sample evaluation table separately.
+
+### Multiple testing and false discoveries
+Testing many pairs increases the chance of false discoveries. The screener therefore reports the total number of tested pairs and the Bonferroni-adjusted significance threshold for transparency:
+
+$$\alpha_{Bonferroni} = \alpha / M$$
+
+where $M$ is the number of tested pairs. In practice, the screener does not automatically require Bonferroni as the only filter, but it reports the threshold so that the user can interpret the results conservatively.
+
+### Running the screener
+```bash
+python3 screen_pairs.py
+```
+
+The script saves:
+- results/pair_screening_results.csv
+- results/top_pairs_out_of_sample.csv
+- several charts in the results directory
+
 ## Performance and risk metrics
 The backtest workflow now computes a compact set of standard portfolio metrics from the strategy's net daily returns.
 
