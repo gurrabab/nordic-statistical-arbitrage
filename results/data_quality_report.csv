@@ -1,0 +1,6 @@
+ticker,first_date,last_date,total_expected_rows,actual_rows,missing_rows,missing_fraction,duplicate_dates,non_positive_prices,constant_price_flag,largest_abs_daily_return,suspicious_return_count,passed_quality_filter,rejection_reason
+SEB-A.ST,2018-01-02,2024-12-30,1825,1759,66,0.03616438356164384,0,0,False,0.1389170002979535,0,True,
+SHB-A.ST,2018-01-02,2024-12-30,1825,1759,66,0.03616438356164384,0,0,False,0.12063629124382147,0,True,
+AZN.ST,2018-01-02,2024-12-30,1825,1759,66,0.03616438356164384,0,0,False,0.0926624522798507,0,True,
+ERIC-B.ST,2018-01-02,2024-12-30,1825,1759,66,0.03616438356164384,0,0,False,0.17494564296950577,0,True,
+SAND.ST,2018-01-02,2024-12-30,1825,1759,66,0.03616438356164384,0,0,False,0.10861083060194443,0,True,

@@ -17,6 +17,193 @@ from src.signals import SignalParameters, create_signal_frame
 from src.validation import estimate_train_test_relationship, split_aligned_prices
 
 
+# ---------------------------------------------------------------------------
+# Multiple-testing corrections
+# ---------------------------------------------------------------------------
+
+SCREENING_COLUMNS: list[str] = [
+    "ticker_y",
+    "ticker_x",
+    "alpha",
+    "hedge_ratio",
+    "cointegration_statistic",
+    "cointegration_pvalue",
+    "cointegration_bonferroni_pvalue",
+    "cointegration_bh_pvalue",
+    "cointegration_significant_raw",
+    "cointegration_significant_bonferroni",
+    "cointegration_significant_bh",
+    "adf_statistic",
+    "adf_pvalue",
+    "adf_bonferroni_pvalue",
+    "adf_bh_pvalue",
+    "adf_significant_raw",
+    "adf_significant_bonferroni",
+    "adf_significant_bh",
+    "half_life",
+    "return_correlation",
+    "n_observations",
+    "passes_filters",
+    "rejection_reason",
+    "score",
+    "rank",
+    "train_period",
+]
+
+
+def bonferroni_correction(
+    pvalues: pd.Series | np.ndarray,
+    n_hypotheses: int | None = None,
+    alpha: float = 0.05,
+) -> tuple[np.ndarray, float]:
+    """Apply the Bonferroni correction for multiple hypothesis testing.
+
+    Parameters
+    ----------
+    pvalues:
+        Raw p-values.
+    n_hypotheses:
+        Number of hypotheses.  Defaults to ``len(pvalues)``.
+    alpha:
+        Family-wise significance level.
+
+    Returns
+    -------
+    adjusted_pvalues:
+        ``min(raw_pvalue * n_hypotheses, 1.0)``.
+    adjusted_threshold:
+        ``alpha / n_hypotheses``.
+    """
+    p = np.asarray(pvalues, dtype=float)
+    if n_hypotheses is None:
+        n_hypotheses = len(p)
+    if n_hypotheses <= 0:
+        raise ValueError("n_hypotheses must be positive.")
+    if np.any((p < 0) | (p > 1)):
+        raise ValueError("p-values must be in [0, 1].")
+
+    adjusted = np.minimum(p * n_hypotheses, 1.0)
+    threshold = alpha / n_hypotheses
+    return adjusted, threshold
+
+
+def benjamini_hochberg_correction(
+    pvalues: pd.Series | np.ndarray,
+    n_hypotheses: int | None = None,
+    alpha: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply the Benjamini-Hochberg FDR correction for multiple hypothesis testing.
+
+    Parameters
+    ----------
+    pvalues:
+        Raw p-values.
+    n_hypotheses:
+        Number of hypotheses.  Defaults to ``len(pvalues)``.
+    alpha:
+        False discovery rate.
+
+    Returns
+    -------
+    adjusted_pvalues:
+        BH-adjusted p-values (monotone).
+    significant:
+        Boolean array indicating significance at the given FDR.
+    """
+    p = np.asarray(pvalues, dtype=float)
+    n = n_hypotheses if n_hypotheses is not None else len(p)
+    if n <= 0:
+        raise ValueError("n_hypotheses must be positive.")
+    if np.any((p < 0) | (p > 1)):
+        raise ValueError("p-values must be in [0, 1].")
+
+    if len(p) == 0:
+        return np.array([], dtype=float), np.array([], dtype=bool)
+
+    # Sort p-values, compute BH thresholds, then unsort
+    sorted_indices = np.argsort(p)
+    sorted_p = p[sorted_indices]
+    m = len(sorted_p)
+    ranks = np.arange(1, m + 1)
+    bh_thresholds = (ranks / n) * alpha
+    # Adjusted p-values: cumulative min of (sorted_p * n / rank)
+    adjusted_sorted = np.minimum(sorted_p * n / ranks, 1.0)
+    # Ensure monotonicity
+    for i in range(m - 2, -1, -1):
+        adjusted_sorted[i] = min(adjusted_sorted[i], adjusted_sorted[i + 1])
+
+    # Significant if sorted_p <= bh_thresholds (original BH)
+    significant_sorted = sorted_p <= bh_thresholds
+
+    # Unsort
+    unsort_indices = np.argsort(sorted_indices)
+    adjusted = adjusted_sorted[unsort_indices]
+    significant = significant_sorted[unsort_indices]
+    return adjusted, significant
+
+
+def apply_multiple_testing_corrections(
+    results: pd.DataFrame,
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    """Add multiple-testing correction columns to a pair-screening results DataFrame.
+
+    Adds columns:
+    - ``cointegration_bonferroni_pvalue``
+    - ``cointegration_bh_pvalue``
+    - ``cointegration_significant_raw``
+    - ``cointegration_significant_bonferroni``
+    - ``cointegration_significant_bh``
+    - ``adf_bonferroni_pvalue``
+    - ``adf_bh_pvalue``
+    - ``adf_significant_raw``
+    - ``adf_significant_bonferroni``
+    - ``adf_significant_bh``
+    """
+    if results.empty:
+        for col in [
+            "cointegration_bonferroni_pvalue",
+            "cointegration_bh_pvalue",
+            "cointegration_significant_raw",
+            "cointegration_significant_bonferroni",
+            "cointegration_significant_bh",
+            "adf_bonferroni_pvalue",
+            "adf_bh_pvalue",
+            "adf_significant_raw",
+            "adf_significant_bonferroni",
+            "adf_significant_bh",
+        ]:
+            results[col] = np.nan
+        return results
+
+    n_hypotheses = len(results)
+
+    raw_coint = results["cointegration_pvalue"].values
+    raw_adf = results["adf_pvalue"].values
+
+    # Bonferroni
+    bonf_coint, _ = bonferroni_correction(raw_coint, n_hypotheses, alpha)
+    bonf_adf, _ = bonferroni_correction(raw_adf, n_hypotheses, alpha)
+
+    # Benjamini-Hochberg
+    bh_coint, sig_coint_bh = benjamini_hochberg_correction(raw_coint, n_hypotheses, alpha)
+    bh_adf, sig_adf_bh = benjamini_hochberg_correction(raw_adf, n_hypotheses, alpha)
+
+    results["cointegration_bonferroni_pvalue"] = bonf_coint
+    results["cointegration_bh_pvalue"] = bh_coint
+    results["cointegration_significant_raw"] = raw_coint <= alpha
+    results["cointegration_significant_bonferroni"] = raw_coint <= (alpha / n_hypotheses)
+    results["cointegration_significant_bh"] = sig_coint_bh
+
+    results["adf_bonferroni_pvalue"] = bonf_adf
+    results["adf_bh_pvalue"] = bh_adf
+    results["adf_significant_raw"] = raw_adf <= alpha
+    results["adf_significant_bonferroni"] = raw_adf <= (alpha / n_hypotheses)
+    results["adf_significant_bh"] = sig_adf_bh
+
+    return results
+
+
 @dataclass(frozen=True)
 class PairScreeningParameters:
     """Configuration for screening a universe of equities for pairs-trading candidates."""
@@ -30,6 +217,7 @@ class PairScreeningParameters:
     maximum_missing_fraction: float
     top_n_pairs: int
     train_fraction: float
+    alpha: float = 0.05  # significance level for multiple-testing corrections
 
     def __post_init__(self) -> None:
         if self.minimum_observations <= 0:
@@ -215,24 +403,7 @@ def screen_pairs(
     """Screen a price frame for valid pairs using only training-period statistics."""
     filtered_prices, _ = filter_ticker_universe(prices, parameters)
     if filtered_prices.empty or len(filtered_prices.columns) < 2:
-        return pd.DataFrame(columns=[
-            "ticker_y",
-            "ticker_x",
-            "alpha",
-            "hedge_ratio",
-            "cointegration_statistic",
-            "cointegration_pvalue",
-            "adf_statistic",
-            "adf_pvalue",
-            "half_life",
-            "return_correlation",
-            "n_observations",
-            "passes_filters",
-            "rejection_reason",
-            "score",
-            "rank",
-            "train_period",
-        ])
+        return pd.DataFrame(columns=SCREENING_COLUMNS)
 
     pairs = generate_unique_pairs(filtered_prices.columns)
 
@@ -268,45 +439,18 @@ def screen_pairs(
 
     results = pd.DataFrame(results_rows)
     if results.empty:
-        return pd.DataFrame(columns=[
-            "ticker_y",
-            "ticker_x",
-            "alpha",
-            "hedge_ratio",
-            "cointegration_statistic",
-            "adf_statistic",
-            "cointegration_pvalue",
-            "adf_pvalue",
-            "half_life",
-            "return_correlation",
-            "n_observations",
-            "passes_filters",
-            "rejection_reason",
-            "score",
-            "rank",
-            "train_period",
-        ])
+        return pd.DataFrame(columns=SCREENING_COLUMNS)
+
+    # Apply multiple-testing corrections to ALL pairs (not just filtered)
+    results = apply_multiple_testing_corrections(results, alpha=parameters.alpha)
 
     valid_results = results[results["passes_filters"]].copy()
     if valid_results.empty:
-        return pd.DataFrame(columns=[
-            "ticker_y",
-            "ticker_x",
-            "alpha",
-            "hedge_ratio",
-            "cointegration_statistic",
-            "adf_statistic",
-            "cointegration_pvalue",
-            "adf_pvalue",
-            "half_life",
-            "return_correlation",
-            "n_observations",
-            "passes_filters",
-            "rejection_reason",
-            "score",
-            "rank",
-            "train_period",
-        ])
+        empty_out = pd.DataFrame(columns=SCREENING_COLUMNS)
+        # Preserve correction columns from full results if any
+        if not results.empty:
+            empty_out = results.iloc[0:0]
+        return empty_out
 
     valid_results["score"] = (
         -2.0 * np.log10(valid_results["cointegration_pvalue"].replace(0, np.nan) + 1e-12)

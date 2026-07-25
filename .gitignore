@@ -13,10 +13,11 @@ venv/
 .ipynb_checkpoints/
 
 # Data and outputs
+# Keep result CSVs and screenshots for portfolio presentation
 /data/*
 !/data/.gitkeep
-/results/*
-!/results/.gitkeep
+# Do NOT exclude /results/* — small result CSVs and screenshots
+# are part of the portfolio project
 
 # OS files
 .DS_Store
@@ -25,3 +26,13 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store?

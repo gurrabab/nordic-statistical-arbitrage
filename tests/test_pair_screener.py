@@ -5,6 +5,9 @@ import pytest
 from src.data_loader import download_ticker_universe
 from src.pair_screener import (
     PairScreeningParameters,
+    apply_multiple_testing_corrections,
+    benjamini_hochberg_correction,
+    bonferroni_correction,
     evaluate_top_pairs,
     filter_ticker_universe,
     generate_unique_pairs,
@@ -167,8 +170,103 @@ def test_partial_ticker_download_failures_are_reported(monkeypatch: pytest.Monke
             raise ValueError("boom")
         return pd.DataFrame({"B": [1.0, 2.0], "C": [3.0, 4.0]})
 
-    prices, report = download_ticker_universe(["A", "B", "C"], start="2020-01-01", downloader=fake_downloader)
+    prices, report = download_ticker_universe(
+        ["A", "B", "C"], start="2020-01-01", downloader=fake_downloader
+    )
 
     assert list(prices.columns) == ["B", "C"]
     assert report.loc["A", "status"] == "failed"
     assert report.loc["B", "status"] == "downloaded"
+
+
+# ---------------------------------------------------------------------------
+# Multiple-testing correction tests
+# ---------------------------------------------------------------------------
+class TestBonferroniCorrection:
+    def test_basic_correction(self):
+        pvalues = np.array([0.01, 0.04, 0.06, 0.50])
+        adjusted, threshold = bonferroni_correction(pvalues, n_hypotheses=4, alpha=0.05)
+        assert adjusted[0] == pytest.approx(0.04)  # 0.01 * 4
+        assert adjusted[1] == pytest.approx(0.16)  # 0.04 * 4
+        assert adjusted[2] == pytest.approx(0.24)  # 0.06 * 4
+        assert threshold == pytest.approx(0.0125)  # 0.05 / 4
+
+    def test_caps_at_one(self):
+        adjusted, _ = bonferroni_correction(np.array([0.5, 0.8]), n_hypotheses=4)
+        assert adjusted[0] == pytest.approx(1.0)
+        assert adjusted[1] == pytest.approx(1.0)
+
+    def test_single_hypothesis(self):
+        adjusted, threshold = bonferroni_correction(np.array([0.03]), n_hypotheses=1, alpha=0.05)
+        assert adjusted[0] == pytest.approx(0.03)
+        assert threshold == pytest.approx(0.05)
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="n_hypotheses must be positive"):
+            bonferroni_correction(np.array([]), n_hypotheses=0)
+
+    def test_invalid_pvalues_raise(self):
+        with pytest.raises(ValueError, match="p-values must be in"):
+            bonferroni_correction(np.array([-0.1, 0.5]))
+
+
+class TestBenjaminiHochbergCorrection:
+    def test_basic_correction(self):
+        pvalues = np.array([0.01, 0.02, 0.05, 0.20, 0.30])
+        adjusted, significant = benjamini_hochberg_correction(pvalues, n_hypotheses=5, alpha=0.05)
+        assert len(adjusted) == 5
+        # BH adjusted = p * n / rank, adjusted_sorted[0] = 0.01 * 5 / 1 = 0.05
+        # adjusted_sorted[1] = 0.02 * 5 / 2 = 0.05
+        # adjusted_sorted[2] = 0.05 * 5 / 3 = 0.0833
+        assert adjusted[0] == pytest.approx(0.05)
+        assert adjusted[1] == pytest.approx(0.05)
+        assert significant[0]
+        assert significant[1]
+        assert not significant[2]  # 0.05 > 0.05 * 3/5 = 0.03
+
+    def test_monotonicity(self):
+        """BH-adjusted p-values should be non-decreasing."""
+        pvalues = np.array([0.001, 0.01, 0.10, 0.20, 0.50])
+        adjusted, _ = benjamini_hochberg_correction(pvalues, n_hypotheses=5, alpha=0.05)
+        for i in range(len(adjusted) - 1):
+            assert adjusted[i] <= adjusted[i + 1] + 1e-10
+
+    def test_empty_returns_empty(self):
+        adjusted, significant = benjamini_hochberg_correction(np.array([]), n_hypotheses=5)
+        assert len(adjusted) == 0
+        assert len(significant) == 0
+
+    def test_invalid_pvalues_raise(self):
+        with pytest.raises(ValueError, match="p-values must be in"):
+            benjamini_hochberg_correction(np.array([0.5, 1.5]))
+
+
+class TestApplyMultipleTestingCorrections:
+    def test_adds_correction_columns(self):
+        results = pd.DataFrame({
+            "cointegration_pvalue": [0.01, 0.04, 0.50],
+            "adf_pvalue": [0.02, 0.03, 0.60],
+            "passes_filters": [True, True, False],
+        })
+        corrected = apply_multiple_testing_corrections(results, alpha=0.05)
+        assert "cointegration_bonferroni_pvalue" in corrected.columns
+        assert "cointegration_bh_pvalue" in corrected.columns
+        assert "cointegration_significant_raw" in corrected.columns
+        assert "cointegration_significant_bonferroni" in corrected.columns
+        assert "cointegration_significant_bh" in corrected.columns
+        assert "adf_bonferroni_pvalue" in corrected.columns
+        assert "adf_bh_pvalue" in corrected.columns
+
+    def test_empty_dataframe(self):
+        empty = pd.DataFrame()
+        result = apply_multiple_testing_corrections(empty)
+        assert len(result) == 0
+
+    def test_deterministic(self):
+        results = pd.DataFrame({
+            "cointegration_pvalue": [0.01, 0.05, 0.10],
+            "adf_pvalue": [0.02, 0.06, 0.15],
+        })
+        r1 = apply_multiple_testing_corrections(results.copy(), alpha=0.05)
+        r2 = apply_multiple_testing_corrections(results.copy(), alpha=0.05)
+        pd.testing.assert_frame_equal(r1, r2)
